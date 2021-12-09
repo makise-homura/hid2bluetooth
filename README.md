@@ -34,7 +34,7 @@ Just copy `hid2bluetooth` to `/usr/sbin` or wherever convenient. Set executable 
 hid2bluetooth [-h] [-b DEV] [-k DEV] [-m DEV] [-v] [-V]
 ```
 
-Usually you would specify only `-b`, `-k`, and `-d` arguments with corresponding values.
+Usually you would specify only `-b`, `-k`, and `-m` arguments with corresponding values.
 
 ## Arguments
 
@@ -118,7 +118,7 @@ Python dependencies required to run: `python3-dbus`, `python3-evdev`.
 
 ## Running
 
-Just run `hid2bluetooth` with `-b`, `-k`, and `-d` arguments with corresponding
+Just run `hid2bluetooth` with `-b`, `-k`, and `-m` arguments with corresponding
 values.
 
 Once started, it will start up threads that consume device inputs, and then
