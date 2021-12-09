@@ -1,0 +1,513 @@
+#!/usr/bin/python3
+
+_version = '0.1'
+
+import os
+import sys
+import dbus
+import socket
+import evdev
+import argparse
+import time
+import threading
+
+class Bluetooth():
+
+    def __init__(self, hcidev, verbose):
+        self.verbose = verbose
+        self.connected = False
+        sdp_record = '''<?xml version="1.0" encoding="UTF-8" ?>
+            <record>
+                <attribute id="0x0001">
+                    <sequence>
+                        <uuid value="0x1124" />
+                    </sequence>
+                </attribute>
+                <attribute id="0x0004">
+                    <sequence>
+                        <sequence>
+                            <uuid value="0x0100" />
+                            <uint16 value="0x0011" />
+                        </sequence>
+                        <sequence>
+                            <uuid value="0x0011" />
+                        </sequence>
+                    </sequence>
+                </attribute>
+                <attribute id="0x0005">
+                    <sequence>
+                        <uuid value="0x1002" />
+                    </sequence>
+                </attribute>
+                <attribute id="0x0006">
+                    <sequence>
+                        <uint16 value="0x656e" />
+                        <uint16 value="0x006a" />
+                        <uint16 value="0x0100" />
+                    </sequence>
+                </attribute>
+                <attribute id="0x0009">
+                    <sequence>
+                        <sequence>
+                            <uuid value="0x1124" />
+                            <uint16 value="0x0100" />
+                        </sequence>
+                    </sequence>
+                </attribute>
+                <attribute id="0x000d">
+                    <sequence>
+                        <sequence>
+                            <sequence>
+                                <uuid value="0x0100" />
+                                <uint16 value="0x0013" />
+                            </sequence>
+                            <sequence>
+                                <uuid value="0x0011" />
+                            </sequence>
+                        </sequence>
+                    </sequence>
+                </attribute>
+                <attribute id="0x0100">
+                    <text value="Raspberry Pi Virtual Keyboard" />
+                </attribute>
+                <attribute id="0x0101">
+                    <text value="USB > BT Keyboard" />
+                </attribute>
+                <attribute id="0x0102">
+                    <text value="Raspberry Pi" />
+                </attribute>
+                <attribute id="0x0200">
+                    <uint16 value="0x0100" />
+                </attribute>
+                <attribute id="0x0201">
+                    <uint16 value="0x0111" />
+                </attribute>
+                <attribute id="0x0202">
+                    <uint8 value="0xC0" />
+                </attribute>
+                <attribute id="0x0203">
+                    <uint8 value="0x00" />
+                </attribute>
+                <attribute id="0x0204">
+                    <boolean value="false" />
+                </attribute>
+                <attribute id="0x0205">
+                    <boolean value="false" />
+                </attribute>
+                <attribute id="0x0206">
+                    <sequence>
+                        <sequence>
+                            <uint8 value="0x22" />
+                            <text encoding="hex" value="05010906a101850175019508050719e029e715002501810295017508810395057501050819012905910295017503910395067508150026ff000507190029ff8100c005010902a10185020901a100950575010509190129051500250181029501750381017508950305010930093109381581257f8106c0c0" />
+                        </sequence>
+                    </sequence>
+                </attribute>
+                <attribute id="0x0207">
+                    <sequence>
+                        <sequence>
+                            <uint16 value="0x0409" />
+                            <uint16 value="0x0100" />
+                        </sequence>
+                    </sequence>
+                </attribute>
+                <attribute id="0x020b">
+                    <uint16 value="0x0100" />
+                </attribute>
+                <attribute id="0x020c">
+                    <uint16 value="0x0c80" />
+                </attribute>
+                <attribute id="0x020d">
+                    <boolean value="false" />
+                </attribute>
+                <attribute id="0x020e">
+                    <boolean value="false" />
+                </attribute>
+                <attribute id="0x020f">
+                    <uint16 value="0x0640" />
+                </attribute>
+                <attribute id="0x0210">
+                    <uint16 value="0x0320" />
+                </attribute>
+            </record>
+            '''
+        print("Using bluetooth:     " + hcidev)
+        bus = dbus.SystemBus()
+        adapter = dbus.Interface(bus.get_object("org.bluez", "/org/bluez/" + hcidev), "org.bluez.Adapter1")
+        propman = dbus.Interface(adapter, 'org.freedesktop.DBus.Properties')
+        try:
+            print("Device MAC Address:  " + propman.Get(adapter.dbus_interface, 'Address'))
+            print("Device Name:         " + propman.Get(adapter.dbus_interface, 'Name'))
+        except dbus.exceptions.DBusException:
+            sys.exit("Can't get DBus properties of device, check if it exists")
+
+        propman.Set(adapter.dbus_interface, 'Powered', True)
+        propman.Set(adapter.dbus_interface, 'DiscoverableTimeout', dbus.UInt32(0))
+        propman.Set(adapter.dbus_interface, 'Discoverable', True)
+        manager = dbus.Interface(bus.get_object("org.bluez", "/org/bluez"), "org.bluez.ProfileManager1")
+        options = { "AutoConnect": True, "ServiceRecord": sdp_record }
+        manager.RegisterProfile("/org/bluez/" + hcidev, "00001124-0000-1000-8000-00805f9b34fb", options)
+        if not propman.Get(adapter.dbus_interface, 'Class') == 0x0005C0:
+            sys.exit("Set Class = 0x0005C0 in /etc/bluetooth/main.conf and restart bluetooth service.")
+
+    def listen(self):
+        print("\033[0;33mWaiting for connections...\033[0m")
+        self.scontrol = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
+        self.sinterrupt = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_SEQPACKET, socket.BTPROTO_L2CAP)
+        self.scontrol.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sinterrupt.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.scontrol.bind((socket.BDADDR_ANY, 17))
+        self.sinterrupt.bind((socket.BDADDR_ANY, 19))
+        self.scontrol.listen(5)
+        self.sinterrupt.listen(5)
+        self.ccontrol, cinfo = self.scontrol.accept()
+        print ("\033[0;32mGot a connection on the control channel from %s \033[0m" % cinfo[0])
+        self.cinterrupt, cinfo = self.sinterrupt.accept()
+        print ("\033[0;32mGot a connection on the interrupt channel from %s \033[0m" % cinfo[0])
+        self.connected = True
+        while self.connected:
+            pass
+
+    def close(self):
+        self.scontrol.close()
+        self.sinterrupt.close()
+        self.connected = False
+
+    def send_string(self, message):
+        if self.connected:
+            if self.verbose % 2:
+                print("Output event:", message)
+            try:
+                self.cinterrupt.send(bytes(message))
+            except socket.error:
+                print("\033[0;31mDisconnected.\033[0m")
+                self.close()
+            except OSError as err:
+                error(err)
+        else:
+            if self.verbose % 2:
+                print("No bluetooth connection, event ignored")
+
+    def send_keys(self, modifier_byte, keys):
+        state = [ 0xA1, 1, 0, 0, 0, 0, 0, 0, 0, 0 ]
+        state[2] = int(modifier_byte)
+        count = 4
+        for key_code in keys:
+            if(count < 10):
+                state[count] = int(key_code)
+            count += 1
+        self.send_string(state)
+
+    def send_mouse(self, keys):
+        state = [0xA1, 2, 0, 0, 0, 0]
+        count = 2
+        for key_code in keys:
+            if(count < 6):
+                state[count] = int(key_code)
+            count += 1
+        self.send_string(state)
+
+
+class Keyboard():
+
+    def __init__(self, btdev, devname, verbose, dontgrab):
+        self.keytable = {
+            "KEY_RESERVED" : 0,
+            "KEY_ESC" : 41,
+            "KEY_1" : 30,
+            "KEY_2" : 31,
+            "KEY_3" : 32,
+            "KEY_4" : 33,
+            "KEY_5" : 34,
+            "KEY_6" : 35,
+            "KEY_7" : 36,
+            "KEY_8" : 37,
+            "KEY_9" : 38,
+            "KEY_0" : 39,
+            "KEY_MINUS" : 45,
+            "KEY_EQUAL" : 46,
+            "KEY_BACKSPACE" : 42,
+            "KEY_TAB" : 43,
+            "KEY_Q" : 20,
+            "KEY_W" : 26,
+            "KEY_E" : 8,
+            "KEY_R" : 21,
+            "KEY_T" : 23,
+            "KEY_Y" : 28,
+            "KEY_U" : 24,
+            "KEY_I" : 12,
+            "KEY_O" : 18,
+            "KEY_P" : 19,
+            "KEY_LEFTBRACE" : 47,
+            "KEY_RIGHTBRACE" : 48,
+            "KEY_ENTER" : 40,
+            "KEY_LEFTCTRL" : 224,
+            "KEY_A" : 4,
+            "KEY_S" : 22,
+            "KEY_D" : 7,
+            "KEY_F" : 9,
+            "KEY_G" : 10,
+            "KEY_H" : 11,
+            "KEY_J" : 13,
+            "KEY_K" : 14,
+            "KEY_L" : 15,
+            "KEY_SEMICOLON" : 51,
+            "KEY_APOSTROPHE" : 52,
+            "KEY_GRAVE" : 53,
+            "KEY_LEFTSHIFT" : 225,
+            "KEY_BACKSLASH" : 50,
+            "KEY_Z" : 29,
+            "KEY_X" : 27,
+            "KEY_C" : 6,
+            "KEY_V" : 25,
+            "KEY_B" : 5,
+            "KEY_N" : 17,
+            "KEY_M" : 16,
+            "KEY_COMMA" : 54,
+            "KEY_DOT" : 55,
+            "KEY_SLASH" : 56,
+            "KEY_RIGHTSHIFT" : 229,
+            "KEY_KPASTERISK" : 85,
+            "KEY_LEFTALT" : 226,
+            "KEY_SPACE" : 44,
+            "KEY_CAPSLOCK" : 57,
+            "KEY_F1" : 58,
+            "KEY_F2" : 59,
+            "KEY_F3" : 60,
+            "KEY_F4" : 61,
+            "KEY_F5" : 62,
+            "KEY_F6" : 63,
+            "KEY_F7" : 64,
+            "KEY_F8" : 65,
+            "KEY_F9" : 66,
+            "KEY_F10" : 67,
+            "KEY_NUMLOCK" : 83,
+            "KEY_SCROLLLOCK" : 71,
+            "KEY_KP7" : 95,
+            "KEY_KP8" : 96,
+            "KEY_KP9" : 97,
+            "KEY_KPMINUS" : 86,
+            "KEY_KP4" : 92,
+            "KEY_KP5" : 93,
+            "KEY_KP6" : 94,
+            "KEY_KPPLUS" : 87,
+            "KEY_KP1" : 89,
+            "KEY_KP2" : 90,
+            "KEY_KP3" : 91,
+            "KEY_KP0" : 98,
+            "KEY_KPDOT" : 99,
+            "KEY_ZENKAKUHANKAKU" : 148,
+            "KEY_102ND" : 100,
+            "KEY_F11" : 68,
+            "KEY_F12" : 69,
+            "KEY_RO" : 135,
+            "KEY_KATAKANA" : 146,
+            "KEY_HIRAGANA" : 147,
+            "KEY_HENKAN" : 138,
+            "KEY_KATAKANAHIRAGANA" : 136,
+            "KEY_MUHENKAN" : 139,
+            "KEY_KPJPCOMMA" : 140,
+            "KEY_KPENTER" : 88,
+            "KEY_RIGHTCTRL" : 228,
+            "KEY_KPSLASH" : 84,
+            "KEY_SYSRQ" : 70,
+            "KEY_RIGHTALT" : 230,
+            "KEY_HOME" : 74,
+            "KEY_UP" : 82,
+            "KEY_PAGEUP" : 75,
+            "KEY_LEFT" : 80,
+            "KEY_RIGHT" : 79,
+            "KEY_END" : 77,
+            "KEY_DOWN" : 81,
+            "KEY_PAGEDOWN" : 78,
+            "KEY_INSERT" : 73,
+            "KEY_DELETE" : 76,
+            "KEY_MUTE" : 239,
+            "KEY_VOLUMEDOWN" : 238,
+            "KEY_VOLUMEUP" : 237,
+            "KEY_POWER" : 102,
+            "KEY_KPEQUAL" : 103,
+            "KEY_PAUSE" : 72,
+            "KEY_KPCOMMA" : 133,
+            "KEY_HANGEUL" : 144,
+            "KEY_HANJA" : 145,
+            "KEY_YEN" : 137,
+            "KEY_LEFTMETA" : 227,
+            "KEY_RIGHTMETA" : 231,
+            "KEY_COMPOSE" : 101,
+            "KEY_STOP" : 243,
+            "KEY_AGAIN" : 121,
+            "KEY_PROPS" : 118,
+            "KEY_UNDO" : 122,
+            "KEY_FRONT" : 119,
+            "KEY_COPY" : 124,
+            "KEY_OPEN" : 116,
+            "KEY_PASTE" : 125,
+            "KEY_FIND" : 244,
+            "KEY_CUT" : 123,
+            "KEY_HELP" : 117,
+            "KEY_CALC" : 251,
+            "KEY_SLEEP" : 248,
+            "KEY_WWW" : 240,
+            "KEY_COFFEE" : 249,
+            "KEY_BACK" : 241,
+            "KEY_FORWARD" : 242,
+            "KEY_EJECTCD" : 236,
+            "KEY_NEXTSONG" : 235,
+            "KEY_PLAYPAUSE" : 232,
+            "KEY_PREVIOUSSONG" : 234,
+            "KEY_STOPCD" : 233,
+            "KEY_REFRESH" : 250,
+            "KEY_EDIT" : 247,
+            "KEY_SCROLLUP" : 245,
+            "KEY_SCROLLDOWN" : 246,
+            "KEY_F13" : 104,
+            "KEY_F14" : 105,
+            "KEY_F15" : 106,
+            "KEY_F16" : 107,
+            "KEY_F17" : 108,
+            "KEY_F18" : 109,
+            "KEY_F19" : 110,
+            "KEY_F20" : 111,
+            "KEY_F21" : 112,
+            "KEY_F22" : 113,
+            "KEY_F23" : 114,
+            "KEY_F24" : 115
+        }
+        self.modkeys = {
+            "KEY_RIGHTMETA" : 0,
+            "KEY_RIGHTALT" : 1,
+            "KEY_RIGHTSHIFT" : 2,
+            "KEY_RIGHTCTRL" : 3,
+            "KEY_LEFTMETA" : 4,
+            "KEY_LEFTALT": 5,
+            "KEY_LEFTSHIFT": 6,
+            "KEY_LEFTCTRL": 7
+        }
+        self.state = [0xA1, 0x01, [0, 0, 0, 0, 0, 0, 0, 0], 0, 0, 0, 0, 0, 0, 0]
+        self.btdev = btdev
+        self.verbose = verbose
+        try:
+            print("Using keyboard:      " + devname)
+            self.dev = evdev.InputDevice("/dev/input/" + devname)
+            print("Device Name:         " + self.dev.name)
+            if not dontgrab:
+                self.dev.grab()
+        except OSError:
+            sys.exit("Keyboard not found")
+
+    def event_loop(self):
+        print("Started collecting keyboard events")
+        for event in self.dev.read_loop():
+            if event.type == evdev.ecodes.EV_KEY and event.value < 2:
+                evdev_code = evdev.ecodes.KEY[event.code]
+                modkey_element = self.modkeys[evdev_code] if evdev_code in self.modkeys else -1
+                if modkey_element > 0:
+                    if self.state[2][modkey_element] == 0:
+                        self.state[2][modkey_element] = 1
+                    else:
+                        self.state[2][modkey_element] = 0
+                else:
+                    hex_key = self.keytable[evdev.ecodes.KEY[event.code]]
+                    for i in range(4, 10):
+                        if self.state[i] == hex_key and event.value == 0:
+                            self.state[i] = 0x00
+                        elif self.state[i] == 0x00 and event.value == 1:
+                            self.state[i] = hex_key
+                            break
+                bin_str = ""
+                element = self.state[2]
+                for bit in element:
+                    bin_str += str(bit)
+                if self.verbose >= 2:
+                    print("Input keyboard event:", self.state)
+                self.btdev.send_keys(int(bin_str, 2), self.state[4:10])
+
+
+class Mouse():
+    def __init__(self, btdev, devname, verbose, dontgrab):
+        self.x = 0
+        self.y = 0
+        self.z = 0
+        self.change = False
+        self.last = 0
+        self.state = [0, 0, 0, 0]
+        self.btdev = btdev
+        self.verbose = verbose
+        try:
+            print("Using mouse:         " + devname)
+            self.dev = evdev.InputDevice("/dev/input/" + devname)
+            print("Device Name:         " + self.dev.name)
+            if not dontgrab:
+                self.dev.grab()
+        except OSError:
+            sys.exit("Mouse not found")
+
+    def event_loop(self):
+        print("Started collecting mouse events")
+        for event in self.dev.read_loop():
+            if event.type == evdev.ecodes.EV_SYN:
+                current = time.monotonic()
+                diff = 20/1000
+                if current - self.last < diff and not self.change:
+                    continue
+                self.last = current
+                self.state[1] = min(127, max(-127, self.x)) & 255
+                self.state[2] = min(127, max(-127, self.y)) & 255
+                self.state[3] = min(127, max(-127, self.z)) & 255
+                self.x = 0
+                self.y = 0
+                self.z = 0
+                self.change = False
+                if self.verbose >= 2:
+                    print("Input mouse event:", self.state)
+                try:
+                    self.btdev.send_mouse(bytes(self.state))
+                except OSError as err:
+                    error(err)
+            if event.type == evdev.ecodes.EV_KEY:
+                self.change = True
+                if event.code >= 272 and event.code <= 276 and event.value < 2:
+                    button_no = event.code - 272
+                    if event.value == 1:
+                        self.state[0] |= 1 << button_no
+                    else:
+                        self.state[0] &= ~(1 << button_no)
+            if event.type == evdev.ecodes.EV_REL:
+                if event.code == 0:
+                    self.x += event.value
+                if event.code == 1:
+                    self.y += event.value
+                if event.code == 8:
+                    self.z += event.value
+
+
+if __name__ == "__main__":
+    if not os.geteuid() == 0:
+        sys.exit("Only root can run this script")
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-V', '--version', action='version', version='%(prog)s ' + _version)
+    parser.add_argument('-b', '--bluetooth', nargs=1, help='bluetooth device to use (example: hci0)', metavar='DEV', default='hci0')
+    parser.add_argument('-k', '--keyboard', nargs=1, help='keyboard event device to use (example: event0)', metavar='DEV', default='event0')
+    parser.add_argument('-m', '--mouse', nargs=1, help='mouse event device to use (example: event1)', metavar='DEV', default='event1')
+    parser.add_argument('-g', '--dontgrab', action='store_true', help='don\'t grab devices on start, allowing them to source inputs for other clients')
+    parser.add_argument('-v', '--verbose', action='count', default=0, help='log events: once for output, twice for input, thrice for both')
+    args = parser.parse_args()
+
+    btdev = Bluetooth(''.join(args.bluetooth), args.verbose)
+    kbd = Keyboard(btdev, ''.join(args.keyboard), args.verbose, args.dontgrab)
+    mouse = Mouse(btdev, ''.join(args.mouse), args.verbose, args.dontgrab)
+    tkbd = threading.Thread(target=kbd.event_loop, daemon=True)
+    tmouse = threading.Thread(target=mouse.event_loop, daemon=True)
+    tkbd.start()
+    tmouse.start()
+
+    try:
+        while True:
+            btdev.listen()
+    except KeyboardInterrupt:
+        if not args.dontgrab:
+            kbd.dev.ungrab()
+            mouse.dev.ungrab()
+        btdev.close()
+        sys.exit("\nTerminating.")
