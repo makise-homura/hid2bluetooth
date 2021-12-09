@@ -7,6 +7,23 @@ Based on code from [keyboard_mouse_emulate_on_raspberry](https://github.com/quan
 but completely revamped to be a standalone Python script rather than complex system
 relying on D-Bus, tmux and other stuff with a massive bunch of requirements.
 
+## Use cases
+
+There are several devices like [these ones](https://aliexpress.ru/wholesale?catId=202004372&SearchText=bluetooth keyboard mouse converter)
+on AliExpress, but they cost $20 to $30. In the other case, you may have an SBC like
+Raspberry Pi or Orange Pi that you use as headless home server. So why not implement
+such a functionality for free using any cheap keyboard and mouse and already existing
+SBC--for free?
+
+For example, I have a tablet with broken touch screen panel, and I'd like to use it
+as a stationary video/music player with keyboard and mouse are connected to it. But
+it can't utilize simultaneous USB OTG and charging, so reconnecting cables may be
+a burden. But what if keyboard and mouse are connected through bluetooth rather
+than USB? System looks enough perfect in this case: you have USB charging, audio
+output connected to amplifier with speakers, and input devices are used through
+bluetooth to select video or music to play. And everything works quite well with
+the SBC that is a home server at the same time.
+
 # Installation
 
 Just copy `hid2bluetooth` to `/usr/sbin` or wherever convenient. Set executable permissions if needed.
