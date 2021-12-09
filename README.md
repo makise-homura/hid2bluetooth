@@ -9,7 +9,7 @@ relying on D-Bus, tmux and other stuff with a massive bunch of requirements.
 
 ## Use cases
 
-There are several devices like [these ones](https://aliexpress.ru/wholesale?catId=202004372&SearchText=bluetooth keyboard mouse converter)
+There are several devices like [these ones](https://aliexpress.ru/wholesale?catId=202004372&SearchText=bluetooth%20keyboard%20mouse%20converter)
 on AliExpress, but they cost $20 to $30. In the other case, you may have an SBC like
 Raspberry Pi or Orange Pi that you use as headless home server. So why not implement
 such a functionality for free using any cheap keyboard and mouse and already existing
